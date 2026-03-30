@@ -1,0 +1,271 @@
+%%{ init: { 'theme': 'dark', 'themeVariables': { 'fontSize': '14px' } } }%%
+flowchart TD
+    %% ============================================================
+    %% 프로그램 시작 - Entry Point
+    %% ============================================================
+    START(["🎵 python genie-dl.py 실행"]) --> PARSE_ARGS["명령줄 인자 파싱<br/>argparse로 -c, -i, -f, --reset 확인"]
+    
+    PARSE_ARGS --> SET_FORMAT{"포맷 확인<br/>-f 옵션"}
+    SET_FORMAT -->|"mp3 (기본값)"| FMT_MP3["BITRATE = 320<br/>EXTENSION = mp3"]
+    SET_FORMAT -->|"flac"| FMT_FLAC["BITRATE = 1000<br/>EXTENSION = flac"]
+    SET_FORMAT -->|"flac24"| FMT_FLAC24["BITRATE = 24bit<br/>EXTENSION = flac"]
+    
+    FMT_MP3 --> SET_GLOBALS["전역 변수 설정<br/>INPUT_URL, DOWNLOAD_CHART,<br/>SEARCH_AMOUNT=20, DEVICE_ID,<br/>SCRIPT_PATH, OUTPUT_PATH"]
+    FMT_FLAC --> SET_GLOBALS
+    FMT_FLAC24 --> SET_GLOBALS
+    
+    SET_GLOBALS --> CHECK_MODE{"실행 모드 확인<br/>__name__ == __main__"}
+    
+    %% ============================================================
+    %% 실행 모드 분기
+    %% ============================================================
+    CHECK_MODE --> MODE_CHECK{"옵션 확인<br/>-c 또는 -i 있음?"}
+    
+    MODE_CHECK -->|"옵션 없음<br/>(대화형 모드)"| MAIN_FUNC["main() 호출"]
+    MODE_CHECK -->|"옵션 있음<br/>(CLI 모드)"| CLI_CONFIG["read_config()<br/>설정 파일에서 ID/PW 로드"]
+    
+    %% ============================================================
+    %% 설정 파일 로드 (공통)
+    %% ============================================================
+    subgraph CONFIG ["📁 설정 파일 관리 - read_config()"]
+        direction TB
+        CFG_START["read_config() 시작"] --> CFG_RESET{"--reset<br/>옵션?"}
+        CFG_RESET -->|"Yes"| CFG_NEW_INPUT["사용자에게 ID/PW 입력 요청<br/>questionary 프롬프트"]
+        CFG_RESET -->|"No"| CFG_EXISTS{"settings.ini<br/>파일 존재?"}
+        CFG_EXISTS -->|"Yes"| CFG_READ["INI 파일에서<br/>ID, PW 읽기"]
+        CFG_EXISTS -->|"No"| CFG_FIRST["처음 실행!<br/>ID/PW 입력 요청"]
+        CFG_FIRST --> CFG_SAVE["genie-dl-settings.ini<br/>파일로 저장"]
+        CFG_NEW_INPUT --> CFG_SAVE
+        CFG_READ --> CFG_DONE["ID, PW 전역 변수 설정 완료"]
+        CFG_SAVE --> CFG_DONE
+    end
+
+    %% ============================================================
+    %% 로그인 (공통)
+    %% ============================================================
+    subgraph LOGIN_FLOW ["🔐 로그인 - login()"]
+        direction TB
+        LGN_START["login(ID, PW) 시작"] --> LGN_POST["POST 요청 전송<br/>app.genie.co.kr/member/<br/>j_Member_Login.json<br/>body: uxd=ID, uxx=PW"]
+        LGN_POST --> LGN_PARSE["JSON 응답 파싱"]
+        LGN_PARSE --> LGN_CHECK{"RetCode == 0?<br/>(로그인 성공?)"}
+        LGN_CHECK -->|"실패"| LGN_FAIL["❌ 에러 출력:<br/>Authentication failed<br/>→ 프로그램 종료"]
+        LGN_CHECK -->|"성공"| LGN_TOKEN["✅ 토큰 3개 저장<br/>user_num = MemUno<br/>user_token = MemToken<br/>stm_token = STM_TOKEN"]
+    end
+
+    %% ============================================================
+    %% 대화형 모드 - main()
+    %% ============================================================
+    MAIN_FUNC --> MAIN_CONFIG["read_config()"]
+    MAIN_CONFIG --> CONFIG
+    CONFIG --> MAIN_LOGIN["login(ID, PW)"]
+    MAIN_LOGIN --> LOGIN_FLOW
+    LOGIN_FLOW --> MAIN_MENU
+
+    subgraph MENU ["📋 대화형 메뉴 - main()"]
+        direction TB
+        MAIN_MENU["ASCII 로고 표시<br/>GENIE-DL v1.0.5"] --> PICK_MENU["pick 라이브러리로<br/>7개 메뉴 표시<br/>↑↓ 키로 선택"]
+        PICK_MENU --> MENU_SEL{"사용자 선택<br/>selected = ?"}
+        MENU_SEL -->|"0: URL 다운로드"| M_URL["URL 입력 받기<br/>parse_user_input(url)"]
+        MENU_SEL -->|"1: 차트 다운로드"| M_CHART_DL["download_realtime_chart(1, 200)"]
+        MENU_SEL -->|"2: 차트 보기"| M_CHART_VIEW["print_realtime_chart(1, 200)"]
+        MENU_SEL -->|"3: 곡 검색"| M_SEARCH_TRACK["search_track(keyword, 20)"]
+        MENU_SEL -->|"4: 앨범 검색"| M_SEARCH_ALBUM["search_album(keyword, 20)"]
+        MENU_SEL -->|"5: 아티스트 검색"| M_SEARCH_ARTIST["search_artist(keyword, 20)"]
+        MENU_SEL -->|"6: 종료"| M_EXIT["sys.exit(1)"]
+    end
+
+    %% ============================================================
+    %% CLI 모드
+    %% ============================================================
+    CLI_CONFIG --> CONFIG
+    CONFIG --> CLI_LOGIN["login(ID, PW)"]
+    CLI_LOGIN --> LOGIN_FLOW
+    LOGIN_FLOW --> CLI_BRANCH{"CLI 옵션 분기"}
+    CLI_BRANCH -->|"-c 차트 옵션"| CLI_CHART["범위 파싱: '1-100'<br/>→ start=1, end=100<br/>(최대 200 제한)"]
+    CLI_CHART --> CLI_CHART_DL["download_realtime_chart(start, end)"]
+    CLI_BRANCH -->|"-i URL 옵션"| CLI_URL["parse_user_input(INPUT_URL)"]
+
+    %% ============================================================
+    %% URL 파싱 - parse_user_input()
+    %% ============================================================
+    subgraph URL_PARSE ["🔗 URL 파싱 - parse_user_input()"]
+        direction TB
+        UP_START["URL 분석 시작"] --> UP_CHECK{"URL에 포함된<br/>키워드 확인"}
+        UP_CHECK -->|"plmSeq 포함"| UP_PLAYLIST["TYPE = Playlist<br/>parse_code()로 ID 추출<br/>→ download_playlist(CODE)"]
+        UP_CHECK -->|"axnm 포함"| UP_ALBUM["TYPE = Album<br/>parse_code()로 ID 추출<br/>→ download_album(CODE)"]
+        UP_CHECK -->|"xxnm 포함"| UP_ARTIST["TYPE = Artist<br/>parse_code()로 ID 추출<br/>→ download_artist(CODE)"]
+        UP_CHECK -->|"xgnm 포함"| UP_TRACK["TYPE = Track<br/>parse_code()로 ID 추출<br/>→ parse_track_data(CODE)<br/>→ download_track()"]
+        UP_CHECK -->|"해당 없음"| UP_ERROR["❌ Invalid URL<br/>→ 프로그램 종료"]
+    end
+
+    M_URL --> URL_PARSE
+    CLI_URL --> URL_PARSE
+
+    %% ============================================================
+    %% 곡 데이터 파싱 - parse_track_data() [핵심 함수]
+    %% ============================================================
+    subgraph TRACK_PARSE ["🎶 곡 스트리밍 URL 획득 - parse_track_data()"]
+        direction TB
+        TP_START["parse_track_data(xgnm, bitrate)"] --> TP_REQUEST["GET 요청:<br/>stm.genie.co.kr/player/<br/>j_StmInfo.json<br/>파라미터: 곡ID + bitrate +<br/>user_num + user_token +<br/>stm_token + DEVICE_ID"]
+        TP_REQUEST --> TP_RESPONSE["JSON 응답 수신"]
+        TP_RESPONSE --> TP_CHECK{"DATA 배열<br/>비어있음?"}
+        TP_CHECK -->|"비어있음<br/>(이용 불가)"| TP_INVALID["IS_VALID = False<br/>(스트리밍 불가 곡)"]
+        TP_CHECK -->|"데이터 있음"| TP_EXTRACT["SONG_NAME = 곡 제목<br/>ARTIST_NAME = 아티스트<br/>DOWNLOAD_URL = 스트리밍 URL<br/>IS_VALID = True"]
+    end
+
+    %% ============================================================
+    %% 실제 파일 다운로드 - download_track()
+    %% ============================================================
+    subgraph FILE_DL ["📥 파일 다운로드 - download_track()"]
+        direction TB
+        DL_START["download_track(url, filename, taskname)"] --> DL_EXEC["utils/download.py 호출<br/>진행바 표시하며 다운로드<br/>block_size = 512 bytes"]
+        DL_EXEC --> DL_SAVE["파일 저장 완료<br/>filename.mp3 또는 .flac"]
+    end
+
+    %% ============================================================
+    %% 앨범 다운로드 흐름
+    %% ============================================================
+    subgraph ALBUM_DL ["💿 앨범 다운로드 - download_album()"]
+        direction TB
+        AD_START["download_album(axnm)"] --> AD_PARSE["parse_album_data(axnm)<br/>앨범 정보 API 호출"]
+        AD_PARSE --> AD_INFO["앨범 정보 추출:<br/>ALBUM_NAME, ALBUM_ARTIST<br/>ALBUM_DATE, ALBUM_TRACK_COUNT<br/>ALBUM_TRACK_CODES/TITLES"]
+        AD_INFO --> AD_MKDIR["폴더 생성:<br/>downloads/아티스트/<br/>[YYYY.MM] 앨범명/"]
+        AD_MKDIR --> AD_LOOP["각 트랙 순회<br/>(1번 ~ TRACK_COUNT번)"]
+        AD_LOOP --> AD_TRACK_PARSE["parse_track_data(트랙ID, BITRATE)<br/>스트리밍 URL 획득"]
+        AD_TRACK_PARSE --> AD_VALID{"IS_VALID?"}
+        AD_VALID -->|"False"| AD_SKIP["⏭ Track Unavailable<br/>건너뛰기"]
+        AD_VALID -->|"True"| AD_FILENAME["파일명 생성:<br/>01. 아티스트 - 곡제목"]
+        AD_FILENAME --> AD_DOWNLOAD["download_track()<br/>파일 다운로드"]
+        AD_DOWNLOAD --> AD_NEXT{"다음 트랙?"}
+        AD_SKIP --> AD_NEXT
+        AD_NEXT -->|"있음"| AD_LOOP
+        AD_NEXT -->|"완료"| AD_DONE["✅ 앨범 다운로드 완료"]
+    end
+
+    UP_ALBUM --> ALBUM_DL
+
+    %% ============================================================
+    %% 플레이리스트 다운로드 흐름
+    %% ============================================================
+    subgraph PLAYLIST_DL ["🎵 플레이리스트 다운로드 - download_playlist()"]
+        direction TB
+        PD_START["download_playlist(seq)"] --> PD_PARSE["parse_playlist_data(seq)<br/>플리 정보 API 호출"]
+        PD_PARSE --> PD_INFO["플리 정보 추출:<br/>PLAYLIST_NAME<br/>PLAYLIST_TRACK_COUNT<br/>PLAYLIST_TRACK_CODES/TITLES"]
+        PD_INFO --> PD_MKDIR["폴더 생성:<br/>downloads/[Playlist] 플리이름/"]
+        PD_MKDIR --> PD_LOOP["각 곡 순회"]
+        PD_LOOP --> PD_TRACK["parse_track_data() → download_track()"]
+        PD_TRACK --> PD_NEXT{"다음 곡?"}
+        PD_NEXT -->|"있음"| PD_LOOP
+        PD_NEXT -->|"완료"| PD_DONE["✅ 플레이리스트 다운로드 완료"]
+    end
+
+    UP_PLAYLIST --> PLAYLIST_DL
+
+    %% ============================================================
+    %% 아티스트 다운로드 흐름
+    %% ============================================================
+    subgraph ARTIST_DL ["👤 아티스트 전체 다운로드 - download_artist()"]
+        direction TB
+        XD_START["download_artist(xxnm)"] --> XD_ALBUMS["get_artist_albums(xxnm)<br/>앨범 목록 API 호출<br/>→ ARTIST_ALBUMS 리스트"]
+        XD_ALBUMS --> XD_NAME["parse_artist_data(xxnm)<br/>아티스트 이름 확인<br/>→ ARTIST_NAME_FIX"]
+        XD_NAME --> XD_LOOP["각 앨범 순회<br/>(1번 ~ TOTAL_ALBUM_COUNT)"]
+        XD_LOOP --> XD_DL_ALBUM["download_album(앨범코드)<br/>개별 앨범 다운로드<br/>(앨범 다운로드 전체 흐름 수행)"]
+        XD_DL_ALBUM --> XD_NEXT{"다음 앨범?"}
+        XD_NEXT -->|"있음"| XD_DIVIDER["구분선 출력"]
+        XD_DIVIDER --> XD_LOOP
+        XD_NEXT -->|"완료"| XD_DONE["✅ 아티스트 전체 다운로드 완료"]
+    end
+
+    UP_ARTIST --> ARTIST_DL
+
+    %% ============================================================
+    %% 개별 곡 다운로드 흐름
+    %% ============================================================
+    UP_TRACK --> TRACK_PARSE
+    TRACK_PARSE --> FILE_DL
+
+    %% ============================================================
+    %% 실시간 차트 흐름
+    %% ============================================================
+    subgraph CHART_DL ["📊 실시간 차트 다운로드 - download_realtime_chart()"]
+        direction TB
+        CD_START["download_realtime_chart(start, end)"] --> CD_API["GET 요청:<br/>chart/j_RealTimeRankSongList.json<br/>pgsize=200"]
+        CD_API --> CD_COLLECT["지정 범위(start~end)의<br/>곡 ID 수집<br/>→ CHART_TRACK_CODES 리스트"]
+        CD_COLLECT --> CD_TIME["현재 날짜/시간 생성<br/>YYMMDD HH:00 형식"]
+        CD_TIME --> CD_MKDIR["폴더 생성:<br/>[Genie TOP 200] -<br/>YYMMDD_HH_00/"]
+        CD_MKDIR --> CD_LOOP["각 곡 순회"]
+        CD_LOOP --> CD_TRACK["parse_track_data() → download_track()"]
+        CD_TRACK --> CD_NEXT{"다음 곡?"}
+        CD_NEXT -->|"있음"| CD_LOOP
+        CD_NEXT -->|"완료"| CD_DONE["✅ 차트 다운로드 완료"]
+    end
+
+    M_CHART_DL --> CHART_DL
+    CLI_CHART_DL --> CHART_DL
+
+    %% ============================================================
+    %% 차트 보기 흐름
+    %% ============================================================
+    subgraph CHART_VIEW ["👀 차트 보기 - print_realtime_chart()"]
+        direction TB
+        CV_START["print_realtime_chart(1, 200)"] --> CV_API["차트 API 호출"]
+        CV_API --> CV_PRINT["터미널에 출력:<br/>1. 아티스트 - 곡명<br/>2. 아티스트 - 곡명<br/>...<br/>200. 아티스트 - 곡명"]
+    end
+
+    M_CHART_VIEW --> CHART_VIEW
+
+    %% ============================================================
+    %% 검색 흐름 (곡/앨범/아티스트 공통 패턴)
+    %% ============================================================
+    subgraph SEARCH_FLOW ["🔍 검색 흐름 (공통 패턴)"]
+        direction TB
+        SF_START["search_track/album/artist<br/>(keyword, amount)"] --> SF_API["검색 API 호출<br/>search/category/songs.json<br/>또는 albums.json, artists.json"]
+        SF_API --> SF_PARSE["검색 결과 파싱<br/>이름, 아티스트, ID 추출"]
+        SF_PARSE --> SF_DISPLAY["결과 번호 목록 표시<br/>1. 아티스트 - 곡명<br/>2. 아티스트 - 곡명<br/>..."]
+        SF_DISPLAY --> SF_INPUT["사용자 번호 입력<br/>(0 = 취소)"]
+        SF_INPUT --> SF_CHOICE{"입력값 확인"}
+        SF_CHOICE -->|"0"| SF_CANCEL["취소 → 종료"]
+        SF_CHOICE -->|"유효한 번호"| SF_SELECT["선택된 항목의<br/>코드 추출"]
+        SF_CHOICE -->|"잘못된 입력"| SF_RETRY["에러 메시지<br/>→ 재입력"]
+        SF_RETRY --> SF_INPUT
+        SF_SELECT --> SF_ACTION{"검색 유형?"}
+        SF_ACTION -->|"곡 검색"| SF_TRACK_DL["parse_track_data()<br/>→ download_track()"]
+        SF_ACTION -->|"앨범 검색"| SF_ALBUM_DL["download_album()"]
+        SF_ACTION -->|"아티스트 검색"| SF_ARTIST_DL["download_artist()"]
+    end
+
+    M_SEARCH_TRACK --> SEARCH_FLOW
+    M_SEARCH_ALBUM --> SEARCH_FLOW
+    M_SEARCH_ARTIST --> SEARCH_FLOW
+
+    %% ============================================================
+    %% 최종 연결 (앨범/플리 → 트랙 → 다운로드)
+    %% ============================================================
+    AD_TRACK_PARSE --> TRACK_PARSE
+    AD_DOWNLOAD --> FILE_DL
+    PD_TRACK --> TRACK_PARSE
+    PD_TRACK --> FILE_DL
+    CD_TRACK --> TRACK_PARSE
+    CD_TRACK --> FILE_DL
+    SF_TRACK_DL --> TRACK_PARSE
+    SF_TRACK_DL --> FILE_DL
+    SF_ALBUM_DL --> ALBUM_DL
+    SF_ARTIST_DL --> ARTIST_DL
+
+    %% ============================================================
+    %% Ctrl+C 처리
+    %% ============================================================
+    CHECK_MODE -.->|"KeyboardInterrupt<br/>(Ctrl+C)"| SIGINT["깨끗한 종료<br/>exit code: 128 + SIGINT"]
+
+    %% ============================================================
+    %% 스타일
+    %% ============================================================
+    classDef startEnd fill:#4a90d9,stroke:#333,color:#fff
+    classDef error fill:#d9534f,stroke:#333,color:#fff
+    classDef success fill:#5cb85c,stroke:#333,color:#fff
+    classDef decision fill:#f0ad4e,stroke:#333,color:#000
+    classDef process fill:#337ab7,stroke:#333,color:#fff
+
+    class START,M_EXIT,SIGINT startEnd
+    class LGN_FAIL,UP_ERROR error
+    class AD_DONE,PD_DONE,XD_DONE,CD_DONE,DL_SAVE success
