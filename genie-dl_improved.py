@@ -63,6 +63,7 @@ INPUT_URL = args.input
 SEARCH_AMOUNT = 20
 DOWNLOAD_CHART = args.download_chart
 RESET_P = args.reset
+DEBUG_MODE = False    # True로 변경하면 LOGIN/TRACK 요청·응답 raw 데이터를 출력
 # [개선6] 고정 DEVICE_ID 제거 → 매 실행시 랜덤 UUID 생성
 # 실제 안드로이드 앱은 요청마다 랜덤 UUID를 사용함 (트래픽 캡처 확인)
 DEVICE_ID = str(uuid.uuid4())
@@ -238,13 +239,34 @@ def login(username,password):
 		"uxx": password
 	}
 	
+	login_url = "https://app.genie.co.kr/member/j_Member_Login.json"
+	
+	# [DEBUG] 로그인 요청 정보 출력
+	if DEBUG_MODE:
+		print("[DEBUG][LOGIN] ══════════════════════════════════════")
+		print("[DEBUG][LOGIN] ▶ REQUEST")
+		print("  Method : POST")
+		print("  URL    : %s" % login_url)
+		print("  Headers: %s" % json.dumps(dict(session.headers), indent=4, ensure_ascii=False))
+		print("  Body   : uxd=%s, uxx=%s" % (username, "*" * len(password)))
+		print("")
+	
 	# [개선1] requests.post → session.post (모바일 앱 헤더 자동 포함)
 	# [개선3] .json() 파싱을 try/except로 감싸서 JSONDecodeError 방지
 	try:
-		response = session.post(
-			"https://app.genie.co.kr/member/j_Member_Login.json",
-			data=credentials
-		).json()
+		raw_response = session.post(login_url, data=credentials)
+		
+		# [DEBUG] 로그인 응답 raw 출력
+		if DEBUG_MODE:
+			print("[DEBUG][LOGIN] ◀ RESPONSE")
+			print("  Status Code : %s" % raw_response.status_code)
+			print("  Headers     : %s" % json.dumps(dict(raw_response.headers), indent=4, ensure_ascii=False))
+			print("  Body (raw)  :")
+			print(json.dumps(raw_response.json(), indent=4, ensure_ascii=False))
+			print("[DEBUG][LOGIN] ══════════════════════════════════════")
+			print("")
+		
+		response = raw_response.json()
 	except (json.JSONDecodeError, requests.exceptions.RequestException) as e:
 		divider()
 		print("[error] Login request failed: %s" % e)
@@ -264,6 +286,14 @@ def login(username,password):
 	user_num = response['DATA0']['MemUno']
 	user_token = response['DATA0']['MemToken']
 	stm_token = response['DATA0']['STM_TOKEN']
+	
+	# [DEBUG] 추출된 토큰 요약
+	if DEBUG_MODE:
+		print("[DEBUG][LOGIN] 추출된 인증 토큰:")
+		print("  MemUno    (user_num)   : %s" % user_num)
+		print("  MemToken  (user_token) : %s..." % str(user_token)[:20])
+		print("  STM_TOKEN (stm_token)  : %s..." % str(stm_token)[:20])
+		print("")
 	
 # ──────────────────────────────────────────────────────────────────────────────
 # [8단계] 데이터 파싱 함수들 (API 응답 → 데이터 추출)
@@ -359,16 +389,32 @@ def parse_track_data(xgnm,bitrate):
 		"apvn": APP_VERSION,
 	}
 	
-	# [요청 파라미터 출력] 서버에 어떤 값을 보내는지 확인용
-	print("[request] ── 스트리밍 API 호출 파라미터 ──")
-	print("  곡 ID (xgnm)    : %s" % xgnm)
-	print("  음질 (bitrate)   : %s" % bitrate)
-	print("  사용자 번호 (unm): %s" % user_num)
-	print("  기기 ID (udid)   : %s" % DEVICE_ID)
-	print("  앱 버전 (apvn)   : %s" % APP_VERSION)
-	
 	api_url = "https://stm.genie.co.kr/player/j_StmInfo.json?xgnm={}&bitrate={}&app_stm_type=normal&unm={}&uxtk={}&vmd=AN&svc=IV&stk={}&udid={}&itn=Y&mts=Y&apvn={}".format(xgnm,bitrate,user_num,user_token,stm_token,DEVICE_ID,APP_VERSION)
-	response = session.get(api_url).json()  # [개선1]
+	
+	# [DEBUG] 스트리밍 요청 정보 출력
+	if DEBUG_MODE:
+		print("[DEBUG][TRACK] ══════════════════════════════════════")
+		print("[DEBUG][TRACK] ▶ REQUEST")
+		print("  Method : GET")
+		print("  URL    : %s" % api_url)
+		print("  Headers: %s" % json.dumps(dict(session.headers), indent=4, ensure_ascii=False))
+		print("  Params :")
+		print(json.dumps(request_params, indent=4, ensure_ascii=False))
+		print("")
+	
+	raw_response = session.get(api_url)
+	
+	# [DEBUG] 스트리밍 응답 raw 출력
+	if DEBUG_MODE:
+		print("[DEBUG][TRACK] ◀ RESPONSE")
+		print("  Status Code : %s" % raw_response.status_code)
+		print("  Headers     : %s" % json.dumps(dict(raw_response.headers), indent=4, ensure_ascii=False))
+		print("  Body (raw)  :")
+		print(json.dumps(raw_response.json(), indent=4, ensure_ascii=False))
+		print("[DEBUG][TRACK] ══════════════════════════════════════")
+		print("")
+	
+	response = raw_response.json()
 	SUCCESS = response['Result']['RetMsg']
 
 	try:
@@ -378,13 +424,14 @@ def parse_track_data(xgnm,bitrate):
 		DOWNLOAD_URL = decode(DATA['STREAMING_MP3_URL'])
 		IS_VALID = True
 		
-		# [결과 URL 출력] 디코딩된 스트리밍 URL 확인용
-		print("[response] ── 스트리밍 결과 ──")
-		print("  아티스트 : %s" % ARTIST_NAME)
-		print("  곡 제목  : %s" % SONG_NAME)
-		print("  결과 상태: %s" % SUCCESS)
-		print("  스트리밍 URL (decoded): %s" % DOWNLOAD_URL)
-		print("")
+		if DEBUG_MODE:
+			print("[DEBUG][TRACK] 추출된 데이터:")
+			print("  아티스트        : %s" % ARTIST_NAME)
+			print("  곡 제목         : %s" % SONG_NAME)
+			print("  결과 상태       : %s" % SUCCESS)
+			print("  스트리밍 URL    : %s" % DOWNLOAD_URL)
+			print("  DATA 전체 키    : %s" % list(DATA.keys()))
+			print("")
 		
 		return DOWNLOAD_URL
 	
